@@ -98,7 +98,8 @@ def parse_args():
                         help='weight decay')
     parser.add_argument('--nesterov', default=False, type=str2bool,
                         help='nesterov')
-
+    parser.add_argument('--seed', type=int,
+                        default=7, help='random seed')
     args = parser.parse_args()
 
     return args
@@ -120,6 +121,15 @@ class AverageMeter(object):
         self.count=self.count + n
         self.avg = self.sum / self.count
 
+def set_random_seed(seed, deterministic=True):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = deterministic
+    torch.backends.cudnn.benchmark = not deterministic
 
 def train(args, train_loader, model, criterion, optimizer, epoch):
     losses = AverageMeter()
@@ -213,7 +223,7 @@ def validate(args, val_loader, model, criterion):
 
 def main():
     args = parse_args()
-    #args.dataset = "datasets"
+    set_random_seed(args.seed, deterministic=True)
 
     if args.name is None:
         if args.deepsupervision:
