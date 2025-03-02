@@ -182,6 +182,190 @@ def rvd(output, target):
 
     return rvd_score_1, rvd_score_2
 
+def hd95(output, target, spacing=(1.0, 1.0), threshold_liver=0.5, threshold_tumor=0.5,
+         max_dist=20.0, verbose=False):
+    """
+    Calculate HD95 for liver and tumor based on 2D CT slice data.
+
+    Args:
+        output: Predicted logits, shape (batch_size, num_channels, H, W)
+        target: Ground truth, shape (batch_size, num_channels, H, W)
+        spacing: Voxel spacing in mm, default (1.0, 1.0) for x and y directions
+        threshold_liver: Threshold for liver binarization, default 0.5
+        threshold_tumor: Threshold for tumor binarization, default 0.5
+        max_dist: Maximum distance cap in mm, default 20.0
+        verbose: Whether to print debug info, default False
+
+    Returns:
+        tuple: (hd95_liver, hd95_tumor) mean HD95 values in mm for liver and tumor
+    """
+    # 输入验证
+    if not (torch.is_tensor(output) or isinstance(output, np.ndarray)) or \
+            not (torch.is_tensor(target) or isinstance(target, np.ndarray)):
+        raise ValueError("Output and target must be PyTorch tensors or NumPy arrays")
+
+    if len(spacing) != 2:
+        raise ValueError("Spacing must be a tuple of length 2 (x, y)")
+
+    if output.shape[1] < 2 or target.shape[1] < 2:
+        raise ValueError("Input and target must have at least 2 channels (liver and tumor)")
+
+    if output.shape[0] == 0:
+        raise ValueError("Batch size cannot be 0")
+
+    # 转换为 NumPy 数组
+    if torch.is_tensor(output):
+        output = torch.sigmoid(output).detach().cpu().numpy()
+    if torch.is_tensor(target):
+        target = target.detach().cpu().numpy()
+
+    # 二值化
+    input_1 = (output[:, 0, :, :] > threshold_liver).astype(bool)  # Liver
+    input_2 = (output[:, 1, :, :] > threshold_tumor).astype(bool)  # Tumor
+    target_1 = (target[:, 0, :, :] > threshold_liver).astype(bool)
+    target_2 = (target[:, 1, :, :] > threshold_tumor).astype(bool)
+
+    hd95_liver_list, hd95_tumor_list = [], []
+    batch_size = output.shape[0]
+
+    for b in range(batch_size):
+        pred_1, gt_1 = input_1[b], target_1[b]
+        pred_2, gt_2 = input_2[b], target_2[b]
+
+        # 计算距离变换
+        dist_pred_1 = distance_transform_edt(~pred_1, sampling=spacing)
+        dist_gt_1 = distance_transform_edt(~gt_1, sampling=spacing)
+        dist_pred_2 = distance_transform_edt(~pred_2, sampling=spacing)
+        dist_gt_2 = distance_transform_edt(~gt_2, sampling=spacing)
+
+        # 肝脏 HD95
+        if gt_1.sum() > 0 and pred_1.sum() > 0:
+            distances_1 = np.concatenate([dist_gt_1[pred_1].flatten(), dist_pred_1[gt_1].flatten()])
+            hd95_1 = np.percentile(distances_1, 95) if distances_1.size > 0 else max_dist
+            hd95_1 = min(hd95_1, max_dist)
+        elif gt_1.sum() == 0 and pred_1.sum() == 0:
+            hd95_1 = 0
+        else:
+            hd95_1 = max_dist
+        hd95_liver_list.append(hd95_1)
+
+        # 肿瘤 HD95
+        if gt_2.sum() > 0 and pred_2.sum() > 0:
+            distances_2 = np.concatenate([dist_gt_2[pred_2].flatten(), dist_pred_2[gt_2].flatten()])
+            hd95_2 = np.percentile(distances_2, 95) if distances_2.size > 0 else max_dist
+            hd95_2 = min(hd95_2, max_dist)
+        elif gt_2.sum() == 0 and pred_2.sum() == 0:
+            hd95_2 = 0
+        else:
+            hd95_2 = max_dist
+        hd95_tumor_list.append(hd95_2)
+
+        if verbose:
+            print(f"Batch {b}: Liver HD95: {hd95_1:.4f} mm, Tumor HD95: {hd95_2:.4f} mm")
+
+    hd95_liver = np.mean(hd95_liver_list)
+    hd95_tumor = np.mean(hd95_tumor_list)
+
+    if verbose:
+        print(f"Mean HD95 - Liver: {hd95_liver:.4f} mm, Tumor: {hd95_tumor:.4f} mm")
+
+    return hd95_liver, hd95_tumor
+
+
+
+def jaccard_index(output, target):
+    smooth = 1e-5
+
+    if torch.is_tensor(output):
+        output = torch.sigmoid(output).data.cpu().numpy()
+    if torch.is_tensor(target):
+        target = target.data.cpu().numpy()
+
+    input_1 = output[:, 0, :, :]  # Liver prediction
+    input_2 = output[:, 1, :, :]  # Tumor prediction
+
+    target_1 = target[:, 0, :, :]  # Liver ground truth
+    target_2 = target[:, 1, :, :]  # Tumor ground truth
+
+    # Threshold to binary masks (if necessary)
+    input_1 = input_1 > 0.5
+    target_1 = target_1 > 0.5
+
+    input_2 = input_2 > 0.5
+    target_2 = target_2 > 0.5
+
+    # Jaccard index (IoU) for liver
+    intersection_1 = (input_1 & target_1).sum()
+    union_1 = (input_1 | target_1).sum()
+    jaccard_1 = (intersection_1 + smooth) / (union_1 + smooth)
+
+    # Jaccard index (IoU) for tumor
+    intersection_2 = (input_2 & target_2).sum()
+    union_2 = (input_2 | target_2).sum()
+    jaccard_2 = (intersection_2 + smooth) / (union_2 + smooth)
+
+    return jaccard_1, jaccard_2
+
+
+# batch_size = output.shape[0]
+import torch
+import numpy as np
+from scipy.ndimage import distance_transform_edt, binary_dilation
+
+def asd(output, target, spacing=(1.0, 1.0), threshold_liver=0.5, threshold_tumor=0.5,
+        max_dist=20.0, verbose=False):
+    """
+    计算肝脏和肿瘤的 ASD，同步优化。
+    """
+    if torch.is_tensor(output):
+        output = torch.sigmoid(output).data.cpu().numpy()
+    if torch.is_tensor(target):
+        target = target.data.cpu().numpy()
+
+    input_1 = (output[:, 0, :, :] > threshold_liver).astype(bool)
+    input_2 = (output[:, 1, :, :] > threshold_tumor).astype(bool)
+    target_1 = (target[:, 0, :, :] > threshold_liver).astype(bool)
+    target_2 = (target[:, 1, :, :] > threshold_tumor).astype(bool)
+
+    asd_liver_list = []
+    asd_tumor_list = []
+    batch_size = output.shape[0]
+
+    for b in range(batch_size):
+        pred_1, gt_1 = input_1[b], target_1[b]
+        pred_2, gt_2 = input_2[b], target_2[b]
+
+        dist_pred_1 = distance_transform_edt(~pred_1) * spacing[0]
+        dist_gt_1 = distance_transform_edt(~gt_1) * spacing[0]
+        dist_pred_2 = distance_transform_edt(~pred_2) * spacing[0]
+        dist_gt_2 = distance_transform_edt(~gt_2) * spacing[0]
+
+        # 肝脏 ASD
+        if pred_1.sum() > 0 and gt_1.sum() > 0:
+            asd_1 = (dist_gt_1[pred_1].mean() + dist_pred_1[gt_1].mean()) / 2
+            asd_1 = min(asd_1, max_dist)
+        else:
+            asd_1 = 0 if pred_1.sum() == 0 and gt_1.sum() == 0 else max_dist
+        asd_liver_list.append(asd_1)
+
+        # 肿瘤 ASD
+        if pred_2.sum() > 0 and gt_2.sum() > 0:
+            asd_2 = (dist_gt_2[pred_2].mean() + dist_pred_2[gt_2].mean()) / 2
+            asd_2 = min(asd_2, max_dist)
+        else:
+            asd_2 = 0 if pred_2.sum() == 0 and gt_2.sum() == 0 else max_dist
+        asd_tumor_list.append(asd_2)
+
+        if verbose:
+            print(f"Batch {b}: Liver ASD: {asd_1:.4f} mm, Tumor ASD: {asd_2:.4f} mm")
+
+    asd_liver = np.mean(asd_liver_list)
+    asd_tumor = np.mean(asd_tumor_list)
+
+    if verbose:
+        print(f"Mean ASD - Liver: {asd_liver:.4f} mm, Tumor: {asd_tumor:.4f} mm")
+
+    return asd_liver, asd_tumor
 
 def accuracy(output, target):
     output = torch.sigmoid(output).view(-1).data.cpu().numpy()
