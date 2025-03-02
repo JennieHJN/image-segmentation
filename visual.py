@@ -192,9 +192,9 @@ def plot(orginImage, originMask, pre1, pre2, originImage=None):
     figure.show()
 
 
-ct_path = '/home/ps/image segmentation/sample/3Diradb/Image'
-mask_path = '/home/ps/image segmentation/sample/3Diradb/Mask'
-jpg_path = '/home/ps/image segmentation/sample/3Diradb/D_SNAU/'
+ct_path = ''
+mask_path = ''
+jpg_path = ''
 ct_files = os.listdir(ct_path)
 mask_files = os.listdir(mask_path)
 import cv2 as cv2

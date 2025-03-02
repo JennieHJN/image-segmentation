@@ -107,18 +107,37 @@ def validate(val_loader, model):
     rvds_1 = AverageMeter()
     rvds_2 = AverageMeter()
 
+
+    asds_1 = AverageMeter()
+    asds_2 = AverageMeter()
+    hd95s_1 = AverageMeter()
+    hd95s_2 = AverageMeter()
+    jacards_1 = AverageMeter()
+    jacards_2 = AverageMeter()
+
     # switch to evaluate mode
     model.eval()
+    total_time = 0
+    total_images = 0
 
     with torch.no_grad():
         for i, (input, target) in tqdm(enumerate(val_loader), total=len(val_loader)):
+            start_time = time.time()
             input = input.cuda()
             target = target.cuda()
 
             output = model(input)
+
+
             voe_1, voe_2 = voe(output, target)
             dice_1, dice_2 = dice_coef(output, target)
             rvd_1, rvd_2 = rvd(output, target)
+
+
+            asd_1,  asd_2  = asd(output, target)
+            hd95_1, hd95_2 = hd95(output, target)
+            jacard_1,jacard_2 = jaccard_index(output, target)
+
 
             voes_1.update(voe_1, input.size(0))
             voes_2.update(voe_2, input.size(0))
@@ -127,6 +146,20 @@ def validate(val_loader, model):
             rvds_1.update(rvd_1, input.size(0))
             rvds_2.update(rvd_2, input.size(0))
 
+
+            asds_1.update(asd_1, input.size(0))
+            asds_2.update(asd_2, input.size(0))
+            hd95s_1.update(hd95_1, input.size(0))
+            hd95s_2.update(hd95_2, input.size(0))
+            jacards_1.update(jacard_1, input.size(0))
+            jacards_2.update(jacard_2, input.size(0))
+
+            end_time = time.time()
+            batch_time = end_time - start_time
+            total_time += batch_time
+            total_images += input.size(0)
+
+    fps = total_images / total_time
     liver_score = dices_1s.li
     tumor_score = dices_2s.li
     log = OrderedDict([
@@ -136,16 +169,22 @@ def validate(val_loader, model):
         ('rvd_2', rvds_2.avg),
         ('dice_1', dices_1s.avg),
         ('dice_2', dices_2s.avg),
+        ('asd_1', asds_1.avg),
+        ('asd_2', asds_2.avg),
+        ('hd95_1', hd95s_1.avg),
+        ('hd95_2', hd95s_2.avg),
+        ('jaccard_1', jacards_1.avg),
+        ('jaccard_2', jacards_2.avg),
         ('voe_1_var', np.std(voes_1.li)),
         ('voe_2_var', np.std(voes_2.li)),
         ('rvd_1_var', np.std(rvds_1.li)),
         ('rvd_2_var', np.std(rvds_2.li)),
         ('dice_1_var', np.std(dices_1s.li)),
         ('dice_2_var', np.std(dices_2s.li)),
+        ('fps', fps)
     ])
 
     return log
-
 import os
 import joblib
 from glob import glob
@@ -217,11 +256,13 @@ def main():
 
     val_log = validate(val_loader, model)
     print(
-        'dice_1: %.4f+%.3f - voe_1: %.4f+%.3f - rvd_1: %.4f+%.3f - dice_2: %.4f+%.3f - voe_2: %.4f+%.3f - rvd_2: %.4f+%.3f'
+        'dice_1: %.4f+%.3f - voe_1: %.4f+%.3f - rvd_1: %.4f+%.3f - dice_2: %.4f+%.3f - voe_2: %.4f+%.3f - rvd_2: %.4f+%.3f asd_1: %.4f - asd_2: %.4f - hd95_1: %.4f - hd95_2: %.4f - jaccard_1: %.4f - jaccard_2: %.4f - fps: %.4f'
         % (val_log['dice_1'], val_log['dice_1_var'], val_log['voe_1'], val_log['voe_1_var'], val_log['rvd_1'],
            val_log['rvd_1_var'],
            val_log['dice_2'], val_log['dice_2_var'], val_log['voe_2'], val_log['voe_2_var'], val_log['rvd_2'],
-           val_log['rvd_2_var']))
+           val_log['rvd_2_var'], val_log['asd_1'], val_log['asd_2'], val_log['hd95_1'], val_log['hd95_2'],
+           val_log['jaccard_1'],
+           val_log['jaccard_2'], val_log['fps']))
     end_time = time.time()
     print("time:", (end_time - first_time) / 60)
 
